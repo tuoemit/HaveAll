@@ -1,0 +1,6 @@
+{
+  "name": "ProxyHub",
+  "description": "A stunning, high-performance client for fetching fresh V2Ray (VMess/VLESS/SS) configs and MTProto Telegram proxies directly from Supabase with smooth integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
