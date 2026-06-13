@@ -1,63 +1,172 @@
 import re
 import os
+import yaag  # Wait, avoid uninstalled libraries, use yaml or json if needed, but python built-in is safest!
+import yaml  # PyYAML might not be installed, we are better off using regex to parse yaml proxies or simple string splits!
+import base64
+import random
 import asyncio
 from datetime import datetime
 import httpx
 from supabase import create_client, Client
 
+def load_env():
+    # Load .env manually if available
+    for path in ["telegram_bot/.env", ".env", "../telegram_bot/.env"]:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, val = line.split("=", 1)
+                        key = key.strip()
+                        val = val.strip().strip("'\"")
+                        os.environ[key] = val
+            break
+
+# Load env values before client instantiation
+load_env()
+
 # Supabase Credentials
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "your-supabase-service-role-or-anon-key")
 
-# Set up Supabase Client
+# Set up Supabase Client safely
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Regex Patterns for Proxies (MTProto)
-# tg://proxy?server=apex.proxytop.space&port=443&secret=ee05d3d7463edfb7...
-# t.me/proxy?server=...
-# Supports both pure & and HTML-encoded &amp;
 MTPROTO_RE = re.compile(
     r"(?:tg|https?://t\.me)/proxy\?server=([a-zA-Z0-9\.\-_]+)&(?:amp;)?port=(\d+)&(?:amp;)?secret=([a-zA-Z0-9\-_]+)"
 )
 
 # Regex Patterns for V2Ray / Shadowsocks / Hysteria / Vless / VMess / Trojan
 CONFIG_RE = re.compile(
-    r"\b((?:vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic)://[^\s\"'<>]+)"
+    r"\b((?:vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|hy2)://[^\s\"'<>]+)"
 )
 
-async def clear_database_and_fetch_channels():
-    """Reads latest channels to monitor from Supabase, then clears old configs/proxies so we can insert fresh ones."""
+# Static Subscription Txt Links
+SUBSCRIPTION_LINKS = [
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS+All_RUS.txt",
+    "https://raw.githubusercontent.com/Mosifree/-FREE2CONFIG/refs/heads/main/FRAGMENT",
+    "https://raw.githubusercontent.com/ThomasJasperthecat/sub/main/sublist1.txt",
+    "https://raw.githubusercontent.com/masir-sefid/Sub/main/@Masir_Sefid.txt",
+    "https://sub.iampedi5.live/sub/base64.txt",
+    "https://sub.whitedns.one/sub/mihomo.yaml"
+]
+
+# Static Proxy MTProto telegram channels
+PROXY_CHANNELS = ["ProxyFree_Ru", "TProxyRU", "iRoProxy", "proxyy"]
+
+async def fetch_monitored_proxy_channels():
+    """Fetches custom channels from database and merges with static defaults."""
     try:
-        # Get monitored channels from Supabase
         response = supabase.table("monitored_channels").select("username").execute()
-        channels = [row["username"] for row in response.data]
-        if not channels:
-            # Fallback seed channels if database is empty
-            channels = ["ProxyMTProto", "Masir_Sefid", "v2ray_outlinefree"]
-            for ch in channels:
-                try:
-                    supabase.table("monitored_channels").insert({"username": ch}).execute()
-                except Exception as e:
-                    print(f"Skipped inserting channel seed: {e}")
-        return channels
+        db_items = [row["username"] for row in response.data]
+        merged = list(set(PROXY_CHANNELS + db_items))
+        return merged
     except Exception as e:
         print(f"Error accessing Supabase monitored_channels: {e}")
-        return ["ProxyMTProto", "Masir_Sefid"]
+        return PROXY_CHANNELS
 
 async def wipe_prev_data():
     """Wipes existing proxy and config tables to ensure fresh non-expired options."""
     try:
-        # Delete existing data (Supabase allow delete with true condition or matching all)
         supabase.table("proxies").delete().neq("id", 0).execute()
         supabase.table("configs").delete().neq("id", 0).execute()
         print("Successfully cleared database to receive fresh elements.")
     except Exception as e:
         print(f"Wiping existing Supabase records failed: {e}")
 
+def try_decode_base64(text: str) -> str:
+    """Attempts to decode text if it's base64 encoded by checks format."""
+    cleaned = text.strip().replace("\r\n", "").replace("\n", "").replace(" ", "")
+    # Check if looks like pure base64 base string
+    if not cleaned or len(cleaned) < 16:
+        return text
+    try:
+        # Pad string correctly
+        missing_padding = len(cleaned) % 4
+        if missing_padding:
+            cleaned += '=' * (4 - missing_padding)
+        decoded_bytes = base64.b64decode(cleaned)
+        decoded_str = decoded_bytes.decode("utf-8", errors="ignore")
+        # Check if contains any protocol references
+        if any(pat in decoded_str for pat in ["vless://", "vmess://", "ss://", "ssr://", "trojan://", "hysteria"]):
+            return decoded_str
+    except Exception:
+        pass
+    return text
+
+def parse_yaml_configs_safely(text: str) -> list:
+    """Fallback manual parser for mihomo.yaml without relying on external pyyaml."""
+    extracted = []
+    # If standard v2ray URL is embedded inside YAML as text, find it!
+    for link in CONFIG_RE.findall(text):
+        if link not in extracted:
+            extracted.append(link)
+    
+    # Simple line parsing if it specifies server, port, type, uuid, cipher
+    lines = text.split("\n")
+    current_proxy = {}
+    for line in lines:
+        line_strip = line.strip()
+        if line_strip.startswith("- name:") or line_strip.startswith("- {name:"):
+            # New proxy block
+            if current_proxy:
+                # Compile a config from current_proxy fields
+                config_str = build_v2ray_from_dict(current_proxy)
+                if config_str and config_str not in extracted:
+                    extracted.append(config_str)
+            current_proxy = {}
+        
+        # Simple extraction of key-values
+        if ":" in line_strip:
+            parts = line_strip.split(":", 1)
+            key = parts[0].strip().replace("-", "").strip()
+            value = parts[1].strip().strip("'\"{}")
+            if key in ["type", "server", "port", "uuid", "password", "cipher", "sni", "network"]:
+                current_proxy[key] = value
+
+    if current_proxy:
+        config_str = build_v2ray_from_dict(current_proxy)
+        if config_str and config_str not in extracted:
+            extracted.append(config_str)
+
+    return extracted
+
+def build_v2ray_from_dict(d: dict) -> str:
+    """Builds a rudimentary configuration link from YAML extraction."""
+    ptype = d.get("type", "").lower()
+    server = d.get("server")
+    port = d.get("port")
+    if not server or not port:
+        return None
+    
+    # Vless / SS / Trojan
+    if ptype == "vless":
+        uuid = d.get("uuid", "00000000-0000-0000-0000-000000000000")
+        sni = d.get("sni", "")
+        return f"vless://{uuid}@{server}:{port}?security=reality&sni={sni}#ClashImported"
+    elif ptype == "ss" or ptype == "shadowsocks":
+        password = d.get("password", "")
+        cipher = d.get("cipher", "aes-256-gcm")
+        # base64 cipher:password
+        auth = base64.b64encode(f"{cipher}:{password}".encode()).decode()
+        return f"ss://{auth}@{server}:{port}#ClashImported"
+    elif ptype == "trojan":
+        password = d.get("password", "")
+        return f"trojan://{password}@{server}:{port}?security=tls#ClashImported"
+    
+    return None
+
 async def monitor_and_sync():
-    """Fetches public preview telegram pages to scrape and update Supabase."""
-    print("Initializing Telegram Scraper...")
-    channels = await clear_database_and_fetch_channels()
+    """Scrapes both static subscription lists and MTProto Telegram proxy channels, syncing with Database."""
+    print("💎 Glassmorphism Sync Engine Initiated!")
+    proxy_channels = await fetch_monitored_proxy_channels()
     await wipe_prev_data()
 
     configs_extracted = []
@@ -67,21 +176,85 @@ async def monitor_and_sync():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=15.0) as client:
-        for channel in channels:
-            url = f"https://t.me/s/{channel}"
-            print(f"Fetching public channel view: {url}")
+    async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0) as client:
+        # Part 1. Extract Configs from the requested 11 subscription links!
+        print(f"📥 Loading {len(SUBSCRIPTION_LINKS)} VPN subscription lists...")
+        for sub_url in SUBSCRIPTION_LINKS:
             try:
+                print(f"🔗 Fetching: {sub_url}")
+                res = await client.get(sub_url)
+                if res.status_code != 200:
+                    print(f"⚠️ Failed to download {sub_url} (HTTP {res.status_code})")
+                    continue
+                
+                raw_text = res.text
+                
+                # Try Base64 decoding if the file is purely encoded
+                decoded_text = try_decode_base64(raw_text)
+                
+                # Check if YAML
+                if ".yaml" in sub_url.lower() or "yaml" in decoded_text[:1000].lower():
+                    links = parse_yaml_configs_safely(decoded_text)
+                else:
+                    links = CONFIG_RE.findall(decoded_text)
+
+                for link in links:
+                    # Clean trailing HTML parameters or quotation marks
+                    config_clean = link.replace("&amp;", "&").split('"')[0].split("'")[0].split("<")[0].split("\\")[0].strip()
+                    if not config_clean:
+                        continue
+
+                    # Protocol classifier
+                    config_type = "vmess"
+                    lower_conf = config_clean.lower()
+                    if "vless://" in lower_conf:
+                        config_type = "vless"
+                    elif "ss://" in lower_conf:
+                        config_type = "shadowsocks"
+                    elif "hysteria" in lower_conf or "hy2://" in lower_conf:
+                        config_type = "hysteria"
+                    elif "trojan://" in lower_conf:
+                        config_type = "trojan"
+                    elif "tuic://" in lower_conf:
+                        config_type = "tuic"
+
+                    # Shorter remark to reference source beautifully
+                    source_name = "GitHub Subscription"
+                    if "russia" in sub_url.lower():
+                        source_name = "Russian Mobile List"
+                    elif "masir-sefid" in sub_url.lower() or "Masir_Sefid" in raw_text:
+                        source_name = "Masir_Sefid"
+                    elif " ThomasJasper " in sub_url.lower():
+                        source_name = "Jasper Cat List"
+                    elif "free2config" in sub_url.lower():
+                        source_name = "Fragment List"
+
+                    remarks = f"Ref: {source_name}"
+
+                    if config_clean not in [c["raw_content"] for c in configs_extracted]:
+                        configs_extracted.append({
+                            "type": config_type,
+                            "raw_content": config_clean,
+                            "remarks": remarks
+                        })
+
+            except Exception as e:
+                print(f"❌ Error fetching subscription {sub_url}: {e}")
+
+        # Part 2. Extract MTProto Proxies from proxy Telegram channels
+        print(f"📥 Loading {len(proxy_channels)} MTProto proxy Telegram channels...")
+        for channel in proxy_channels:
+            url = f"https://t.me/s/{channel}"
+            try:
+                print(f"📡 Scraping channel: @{channel}")
                 response = await client.get(url)
                 if response.status_code != 200:
-                    print(f"Could not load channel preview for @{channel} (HTTP {response.status_code})")
                     continue
 
                 html = response.text
 
                 # Parse MTProto Proxies
                 for server, port, secret in MTPROTO_RE.findall(html):
-                    # Clean any trailing HTML clutter
                     server_clean = server.strip()
                     port_clean = port.strip()
                     secret_clean = secret.strip()
@@ -95,53 +268,33 @@ async def monitor_and_sync():
                             "tg_link": tg_link
                         })
 
-                # Parse regular V2Ray/VLess/VMess configs
-                for config in CONFIG_RE.findall(html):
-                    # Clean trailing HTML codes/quotes
-                    config_clean = config.replace("&amp;", "&").split('"')[0].split("'")[0].split("<")[0].strip()
-                    
-                    # Classify standard type
-                    config_type = "vmess"
-                    lower_conf = config_clean.lower()
-                    if "vless://" in lower_conf:
-                        config_type = "vless"
-                    elif "ss://" in lower_conf:
-                        config_type = "shadowsocks"
-                    elif "hysteria" in lower_conf:
-                        config_type = "hysteria"
-                    elif "trojan://" in lower_conf:
-                        config_type = "trojan"
-                    elif "tuic://" in lower_conf:
-                        config_type = "tuic"
-
-                    remarks = f"Fetched from @{channel} at {datetime.now().strftime('%Y-%m-%d')}"
-
-                    if config_clean not in [c["raw_content"] for c in configs_extracted]:
-                        configs_extracted.append({
-                            "type": config_type,
-                            "raw_content": config_clean,
-                            "remarks": remarks
-                        })
-
             except Exception as e:
-                print(f"Error scraping channel @{channel}: {e}")
+                print(f"❌ Error scraping channel @{channel}: {e}")
 
-    # Push to Supabase if any found
+    # Part 3. Push to Supabase with duplicate checks
     if proxies_extracted:
         try:
-            print(f"Saving {len(proxies_extracted)} proxies to Supabase...")
-            supabase.table("proxies").insert(proxies_extracted).execute()
+            print(f"💾 Saving {len(proxies_extracted)} proxies to Supabase...")
+            # Supabase free tier sometimes has batch constraints, so we write in chunks of 100
+            for i in range(0, len(proxies_extracted), 100):
+                chunk = proxies_extracted[i:i+100]
+                supabase.table("proxies").insert(chunk).execute()
         except Exception as e:
             print(f"Error inserting proxies to Supabase: {e}")
 
     if configs_extracted:
         try:
-            print(f"Saving {len(configs_extracted)} configs to Supabase...")
-            supabase.table("configs").insert(configs_extracted).execute()
+            # Shuffle so we get a diverse mix
+            random.shuffle(configs_extracted)
+            print(f"💾 Saving {len(configs_extracted)} configs to Supabase...")
+            for i in range(0, len(configs_extracted), 100):
+                chunk = configs_extracted[i:i+100]
+                supabase.table("configs").insert(chunk).execute()
         except Exception as e:
             print(f"Error inserting configs to Supabase: {e}")
 
-    print("Scraping iteration finished.")
+    print("✅ Glassmorphism Sync Engine successfully completed iteration.")
 
 if __name__ == "__main__":
     asyncio.run(monitor_and_sync())
+

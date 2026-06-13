@@ -1,5 +1,5 @@
 -- ====================================================================
--- SUPABASE SCHEMA SETUP FOR PROXYHUB
+-- SUPABASE SCHEMA SETUP FOR HAVEALL (HAVE ALL)
 -- Run this script in your Supabase SQL Editor (https://supabase.com)
 -- ====================================================================
 

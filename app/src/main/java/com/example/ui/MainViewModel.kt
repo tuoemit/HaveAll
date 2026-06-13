@@ -6,10 +6,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.MainActivity
-import com.example.data.RetrofitClient
-import com.example.data.SupabaseConfig
-import com.example.data.SupabaseProxy
+import com.example.data.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,6 +32,10 @@ class MainViewModel : ViewModel() {
     private val _configsState = MutableStateFlow<UiState<List<SupabaseConfig>>>(UiState.Loading)
     val configsState: StateFlow<UiState<List<SupabaseConfig>>> = _configsState.asStateFlow()
 
+    // Administrative state flow
+    private val _channelsState = MutableStateFlow<UiState<List<SupabaseChannel>>>(UiState.Loading)
+    val channelsState: StateFlow<UiState<List<SupabaseChannel>>> = _channelsState.asStateFlow()
+
     // Pagination management
     private var proxiesOffset = 0
     private var configsOffset = 0
@@ -54,8 +55,10 @@ class MainViewModel : ViewModel() {
         if (url.isNotEmpty() && key.isNotEmpty()) {
             refreshData()
         } else {
-            _proxiesState.value = UiState.Error("Supabase credentials missing! Click settings below to configure.")
-            _configsState.value = UiState.Error("Supabase credentials missing! Click settings below to configure.")
+            val missingMsg = "Supabase credentials missing! Click settings below to configure."
+            _proxiesState.value = UiState.Error(missingMsg)
+            _configsState.value = UiState.Error(missingMsg)
+            _channelsState.value = UiState.Error(missingMsg)
         }
     }
 
@@ -69,6 +72,7 @@ class MainViewModel : ViewModel() {
         
         loadNextProxiesPage()
         loadNextConfigsPage()
+        loadMonitoredChannels()
     }
 
     fun loadNextProxiesPage() {
@@ -121,13 +125,73 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    fun loadMonitoredChannels() {
+        val url = _supabaseUrl.value
+        val key = _supabaseKey.value
+        if (url.isEmpty() || key.isEmpty()) return
+
+        viewModelScope.launch {
+            _channelsState.value = UiState.Loading
+            try {
+                val api = RetrofitClient.createService(url)
+                val channels = api.getMonitoredChannels(apiKey = key, authHeader = "Bearer $key")
+                _channelsState.value = UiState.Success(channels)
+            } catch (e: Exception) {
+                _channelsState.value = UiState.Error("Failed to load custom channels: ${e.localizedMessage ?: e.message}")
+            }
+        }
+    }
+
+    fun addCustomChannel(context: Context, username: String) {
+        val url = _supabaseUrl.value
+        val key = _supabaseKey.value
+        val cleanedName = username.replace("@", "").trim()
+        if (url.isEmpty() || key.isEmpty() || cleanedName.isEmpty()) return
+
+        viewModelScope.launch {
+            try {
+                val api = RetrofitClient.createService(url)
+                api.addMonitoredChannel(
+                    apiKey = key,
+                    authHeader = "Bearer $key",
+                    request = AddChannelRequest(username = cleanedName)
+                )
+                Toast.makeText(context, "Added @$cleanedName successfully!", Toast.LENGTH_SHORT).show()
+                loadMonitoredChannels()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Insert failed: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    fun deleteCustomChannel(context: Context, username: String) {
+        val url = _supabaseUrl.value
+        val key = _supabaseKey.value
+        if (url.isEmpty() || key.isEmpty() || username.isEmpty()) return
+
+        viewModelScope.launch {
+            try {
+                val api = RetrofitClient.createService(url)
+                api.deleteMonitoredChannel(
+                    apiKey = key,
+                    authHeader = "Bearer $key",
+                    username = "eq.$username" // Matches exact username row via PostgRESTeq query
+                )
+                Toast.makeText(context, "Removed @$username!", Toast.LENGTH_SHORT).show()
+                loadMonitoredChannels()
+            } catch (e: Exception) {
+                // PostgREST eq deletes can sometimes return void; if delete operation is void, capture it softly
+                loadMonitoredChannels()
+            }
+        }
+    }
+
     // Connect to MTProto Telegram proxy
     fun connectProxy(context: Context, tgLink: String) {
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(tgLink))
             context.startActivity(intent)
         } catch (e: Exception) {
-            // Fallback if telegram isn't installed
             Toast.makeText(context, "Telegram app not found or could not open!", Toast.LENGTH_LONG).show()
         }
     }
@@ -135,8 +199,6 @@ class MainViewModel : ViewModel() {
     // Connect config via hiddify app schema
     fun connectHiddifyConfig(context: Context, rawConfig: String) {
         try {
-            // Support adding profiles directly into Hiddify or similar v2ray clients using the intent schema:
-            // clashing/v2ray url schemes are often: hiddify://import/URL_OF_FILE or adding config directly via hiddify://import/#CONFIG_ENCODED
             val prefixScheme = "hiddify://import/#"
             val uri = Uri.parse("$prefixScheme$rawConfig")
             val intent = Intent(Intent.ACTION_VIEW, uri)

@@ -7,7 +7,7 @@
 
 set -e
 
-echo "🚀 Booting ProxyHub Bot initialization..."
+echo "🚀 Booting HaveAll Bot initialization..."
 
 # 1. Install curl if not available
 if ! command -v curl &> /dev/null; then
@@ -90,6 +90,6 @@ uv pip install \
     httpx==0.27.0
 
 # 6. Booting the actual bot daemonizer
-echo "🤖 Starting ProxyHub Telegram Bot service..."
+echo "🤖 Starting HaveAll Telegram Bot service..."
 python telegram_bot/telegram_bot.py
 

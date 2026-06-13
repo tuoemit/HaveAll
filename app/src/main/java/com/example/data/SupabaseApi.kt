@@ -6,9 +6,7 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
-import retrofit2.http.GET
-import retrofit2.http.Header
-import retrofit2.http.Query
+import retrofit2.http.*
 import java.util.concurrent.TimeUnit
 
 // Models matching Supabase tables
@@ -27,6 +25,17 @@ data class SupabaseProxy(
     val secret: String = "",
     val tg_link: String = "",
     val created_at: String = ""
+)
+
+data class SupabaseChannel(
+    val id: Long = 0,
+    val username: String = "",
+    val created_at: String = ""
+)
+
+// Request body for inserting channels
+data class AddChannelRequest(
+    val username: String
 )
 
 interface SupabaseApi {
@@ -49,6 +58,30 @@ interface SupabaseApi {
         @Query("offset") offset: Int,
         @Query("order") order: String = "created_at.desc"
     ): List<SupabaseProxy>
+
+    // Admin monitored channels controls
+    @GET("rest/v1/monitored_channels")
+    suspend fun getMonitoredChannels(
+        @Header("apikey") apiKey: String,
+        @Header("Authorization") authHeader: String,
+        @Query("select") select: String = "*",
+        @Query("order") order: String = "username.asc"
+    ): List<SupabaseChannel>
+
+    @POST("rest/v1/monitored_channels")
+    suspend fun addMonitoredChannel(
+        @Header("apikey") apiKey: String,
+        @Header("Authorization") authHeader: String,
+        @Header("Prefer") prefer: String = "return=representation",
+        @Body request: AddChannelRequest
+    ): List<SupabaseChannel>
+
+    @DELETE("rest/v1/monitored_channels")
+    suspend fun deleteMonitoredChannel(
+        @Header("apikey") apiKey: String,
+        @Header("Authorization") authHeader: String,
+        @Query("username") username: String
+    )
 }
 
 object RetrofitClient {
@@ -57,7 +90,6 @@ object RetrofitClient {
         .build()
 
     fun createService(baseUrl: String): SupabaseApi {
-        // Safe check for valid URL ending with '/'
         val formattedUrl = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
 
         val logging = HttpLoggingInterceptor().apply {
