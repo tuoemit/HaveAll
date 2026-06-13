@@ -96,6 +96,54 @@ async def delete_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception as e:
             logger.info(f"Failed to delete message: {e}")
 
+async def send_log_to_admins(context: ContextTypes.DEFAULT_TYPE, action: str, user) -> None:
+    """Logs the user interaction beautifully in the server console and Telegram chat for Admins."""
+    username_str = f"@{user.username}" if user.username else "No Username"
+    full_name_str = f"{user.first_name} {user.last_name or ''}".strip()
+    
+    # Beautiful Console Log format
+    logger.info(
+        "\n⚡ [HAVEALL ACTIVITY] ⚡\n"
+        "👤 User: %s (%s, ID: %d)\n"
+        "⚙️ Action: %s\n"
+        "📅 Time: %s UTC\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        username_str,
+        full_name_str,
+        user.id,
+        action,
+        datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    )
+
+    if not ADMIN_TELEGRAM_IDS:
+        return
+    
+    # Avoid infinite log loops or redundant logging of admin panel navigation
+    if user.id in ADMIN_TELEGRAM_IDS and any(kw in action for kw in ["admin_panel", "adm_list", "adm_add_prompt", "adm_del_prompt"]):
+        return
+
+    mention_str = f"[{user.first_name}](tg://user?id={user.id})"
+    log_text = (
+        "🔔 **HAVEALL BOT ACTIVITY LOG** 🔔\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 **User:** {mention_str}\n"
+        f"🆔 **User ID:** `{user.id}`\n"
+        f"🏷 **Username:** {username_str}\n"
+        f"⚙️ **Action:** `{action}`\n"
+        f"📅 **Time (UTC):** `{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}`\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    
+    for admin_id in ADMIN_TELEGRAM_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=log_text,
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send activity log to admin {admin_id}: {e}")
+
 # Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Glassmorphic Home Menu."""
@@ -103,28 +151,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_chat.type in ["group", "supergroup"]:
         save_group_chat(update.effective_chat.id)
 
+    await send_log_to_admins(context, "Opened Main Menu (/start)", update.effective_user)
+
     keyboard = [
         [
-            InlineKeyboardButton("Get MTProto Proxies", callback_data="get_proxies"),
-            InlineKeyboardButton("Get 150 VPN Configs", callback_data="get_configs"),
+            InlineKeyboardButton("⚡ Proxies", callback_data="get_proxies"),
+            InlineKeyboardButton("🔌 Configs File", callback_data="get_configs"),
         ],
         [
-            InlineKeyboardButton("View Project Status", callback_data="status"),
-            InlineKeyboardButton("Force Scrape", callback_data="force_scrape"),
+            InlineKeyboardButton("📊 Status", callback_data="status"),
+            InlineKeyboardButton("🔄 Scrape", callback_data="force_scrape"),
         ],
         [
-            InlineKeyboardButton("Admin Dashboard", callback_data="admin_panel"),
+            InlineKeyboardButton("🛠 Admin Panel", callback_data="admin_panel"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
         text=(
-            "HAVEALL PORTAL\n"
+            "💎 **HAVEALL PORTAL** 💎\n"
             "همه برای تو\n"
             "--------------------\n"
-            "Real-time proxies and tunnel scraper.\n\n"
-            "Tunnels are verified and updated every 30 minutes.\n"
+            "⚡ Speed proxies and tunnel scraper.\n\n"
+            "Verified every 30 minutes.\n"
             "--------------------\n"
             "Select action:"
         ),
@@ -146,16 +196,35 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = query.from_user.id
     data = query.data
 
+    # Match tapped button to clean label
+    button_map = {
+        "get_proxies": "Tapped '⚡ Proxies'",
+        "get_configs": "Requested '🔌 Configs File' (150 VPN links)",
+        "status": "Viewed '📊 Status' dashboard",
+        "force_scrape": "Forced manual '🔄 Scrape' sync",
+        "admin_panel": "Opened '🛠 Admin Panel'",
+        "adm_list": "Listed target database scraper channels",
+        "adm_add_prompt": "Admin: Requested add channel guidelines",
+        "adm_del_prompt": "Admin: Requested delete channel guidelines",
+        "back_main": "Returned to Main Menu"
+    }
+    action_label = button_map.get(data, f"Tapped button: {data}")
+    await send_log_to_admins(context, action_label, query.from_user)
+
     if data == "get_proxies":
         try:
             res = supabase.table("proxies").select("*").limit(200).execute()
             all_proxies = res.data
             if not all_proxies:
-                await query.edit_message_text(
-                    text="No active nodes found in Supabase.\nRun /scrape or build in app.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="back_main")]]),
-                    parse_mode="Markdown"
-                )
+                text = "No active nodes found in Supabase.\nRun /scrape or build in app."
+                if query.message:
+                    await query.edit_message_text(
+                        text=text,
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="back_main")]]),
+                        parse_mode="Markdown"
+                    )
+                else:
+                    await query.answer(text, show_alert=True)
                 return
 
             sample_size = min(20, len(all_proxies))
@@ -163,31 +232,40 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
             keyboard = []
             for idx, p in enumerate(selected, 1):
-                if len(keyboard) == 0 or len(keyboard[-1]) >= 2:
+                if len(keyboard) == 0 or len(keyboard[-1]) >= 4:
                     keyboard.append([])
-                keyboard[-1].append(InlineKeyboardButton("Connect", url=p['tg_link']))
+                # Simple neat proxy buttons (P1, P2, P3... no emojis inside)
+                keyboard[-1].append(InlineKeyboardButton(f"P{idx}", url=p['tg_link']))
 
-            keyboard.append([InlineKeyboardButton("Back", callback_data="back_main")])
-            
+            if query.message:
+                keyboard.append([InlineKeyboardButton("Back", callback_data="back_main")])
+
             await query.edit_message_text(
-                text="Enjoy connection links:",
+                text="⚡ **HAVEALL PROXIES** ⚡\nSelect a proxy to connect instantly:",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="Markdown"
             )
         except Exception as e:
             logger.error(f"Error fetching proxies: {e}")
-            await query.edit_message_text("Portal error. Verify database configuration.")
+            if query.message:
+                await query.edit_message_text("Portal error. Verify database configuration.")
+            else:
+                await query.answer("Portal error.", show_alert=True)
 
     elif data == "get_configs":
         try:
             res = supabase.table("configs").select("*").limit(1000).execute()
             all_configs = res.data
             if not all_configs:
-                await query.edit_message_text(
-                    text="No configs found in Supabase.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="back_main")]]),
-                    parse_mode="Markdown"
-                )
+                text = "No configs found in Supabase."
+                if query.message:
+                    await query.edit_message_text(
+                        text=text,
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="back_main")]]),
+                        parse_mode="Markdown"
+                    )
+                else:
+                    await query.answer(text, show_alert=True)
                 return
 
             sample_size = min(150, len(all_configs))
@@ -200,24 +278,33 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(file_content)
 
-            await query.message.reply_document(
-                document=open(file_path, "rb"),
-                filename=file_path,
-                caption=(
-                    "HAVEALL CONFIGS BUNDLE\n"
-                    "--------------------\n"
-                    f"Extracted {sample_size} configs.\n"
-                    "Import into Hiddify or v2rayNG client app."
-                ),
-                parse_mode="Markdown"
-            )
+            dest_chat_id = query.message.chat_id if query.message else query.from_user.id
+
+            with open(file_path, "rb") as doc_file:
+                await context.bot.send_document(
+                    chat_id=dest_chat_id,
+                    document=doc_file,
+                    filename=file_path,
+                    caption=(
+                        "📂 **HAVEALL CONFIGS** 📂\n"
+                        f"Extracted {sample_size} configs. Import into Hiddify or v2rayNG client app."
+                    ),
+                    parse_mode="Markdown"
+                )
             
             if os.path.exists(file_path):
                 os.remove(file_path)
 
+            if not query.message:
+                await query.answer("📂 Configs sent to your private chat!", show_alert=True)
+
         except Exception as e:
             logger.error(f"Error sending configs file: {e}")
-            await query.edit_message_text(f"Failed to generate config bundle: {e}")
+            err_msg = f"Failed to generate configs: {e}"
+            if query.message:
+                await query.edit_message_text(err_msg)
+            else:
+                await query.answer(err_msg, show_alert=True)
 
     elif data == "status":
         try:
@@ -232,11 +319,11 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
             await query.edit_message_text(
                 text=(
-                    "HAVEALL STATUS\n"
+                    "📊 **HAVEALL STATUS** 📊\n"
                     "--------------------\n"
-                    f"Monitored: {len(SUBSCRIPTION_LINKS)} channels\n"
-                    f"Custom Channels: {ch_count}\n"
-                    f"MTProto Proxies: {px_count}\n"
+                    f"channels: {len(SUBSCRIPTION_LINKS)}\n"
+                    f"Custom: {ch_count}\n"
+                    f"Proxies: {px_count}\n"
                     f"Configs: {cf_count}\n"
                     "--------------------\n"
                     "Status: Online\n"
@@ -253,12 +340,12 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.answer("Access restricted to Administrators!", show_alert=True)
             return
 
-        await query.edit_message_text("Scraper operation active. Synchronizing...")
+        await query.edit_message_text("🔄 Scraper operation active. Synchronizing...")
         try:
             await monitor_and_sync()
             await query.edit_message_text(
                 text=(
-                    "SYNCHRONIZATION SUCCESSFUL\n"
+                    "🔄 **SYNCHRONIZATION SUCCESSFUL** 🔄\n"
                     "--------------------\n"
                     "All proxy nodes and config files refreshed."
                 ),
@@ -287,9 +374,9 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         ]
         await query.edit_message_text(
             text=(
-                "HAVEALL ADMIN CONTROL\n"
+                "🛠 **HAVEALL ADMIN** 🛠\n"
                 "--------------------\n"
-                "Manage database channels and synchronization parameters."
+                "Manage database channels and sync."
             ),
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
@@ -299,7 +386,7 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             res = supabase.table("monitored_channels").select("*").execute()
             channels = [row["username"] for row in res.data]
-            text = "MONITORED CHANNELS\n--------------------\n"
+            text = "📋 **MONITORED CHANNELS** 📋\n--------------------\n"
             if not channels:
                 text += "No custom channels registered."
             else:
@@ -331,22 +418,22 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     elif data == "back_main":
         keyboard = [
             [
-                InlineKeyboardButton("Get MTProto Proxies", callback_data="get_proxies"),
-                InlineKeyboardButton("Get 150 VPN Configs", callback_data="get_configs"),
+                InlineKeyboardButton("⚡ Proxies", callback_data="get_proxies"),
+                InlineKeyboardButton("🔌 Configs File", callback_data="get_configs"),
             ],
             [
-                InlineKeyboardButton("View Project Status", callback_data="status"),
-                InlineKeyboardButton("Force Scrape", callback_data="force_scrape"),
+                InlineKeyboardButton("📊 Status", callback_data="status"),
+                InlineKeyboardButton("🔄 Scrape", callback_data="force_scrape"),
             ],
             [
-                InlineKeyboardButton("Admin Dashboard", callback_data="admin_panel"),
+                InlineKeyboardButton("🛠 Admin Panel", callback_data="admin_panel"),
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
             text=(
-                "HAVEALL PORTAL\n"
-                "Select what you would like to retrieve:"
+                "💎 **HAVEALL PORTAL** 💎\n"
+                "Select action:"
             ),
             reply_markup=reply_markup,
             parse_mode="Markdown"
@@ -369,6 +456,7 @@ async def add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         supabase.table("monitored_channels").insert({"username": ch_name}).execute()
         await update.message.reply_text(f"Registered channel @{ch_name} successfully.")
+        await send_log_to_admins(context, f"Admin added channel: @{ch_name}", update.effective_user)
     except Exception as e:
         await update.message.reply_text(f"Failed to register channel: {e}")
     await delete_user_message(update, context)
@@ -389,6 +477,7 @@ async def remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         supabase.table("monitored_channels").delete().eq("username", ch_name).execute()
         await update.message.reply_text(f"Removed channel @{ch_name}.")
+        await send_log_to_admins(context, f"Admin removed channel: @{ch_name}", update.effective_user)
     except Exception as e:
         await update.message.reply_text(f"Deletion error: {e}")
     await delete_user_message(update, context)
@@ -400,6 +489,7 @@ async def scrape_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await delete_user_message(update, context)
         return
 
+    await send_log_to_admins(context, "Initiated manual /scrape command", update.effective_user)
     msg = await update.message.reply_text("Manual sync initiated. Synchronizing...", parse_mode="Markdown")
     try:
         await monitor_and_sync()
@@ -419,152 +509,52 @@ async def scrape_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # Inline Query Handler for Inline Chatting!
 async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Allows users to type `@your_bot_name` in any chat to share proxies, configs, guides or status logs instantly."""
-    query = update.inline_query.query.strip().lower()
     results = []
 
-    # Detect search category
-    is_log = any(kw in query for kw in ["log", "status", "stats", "stat", "about", "info", "آمار", "وضعیت"])
-    is_config = any(kw in query for kw in ["config", "vless", "vmess", "ss", "shadowsocks", "trojan", "hysteria"])
-    is_proxy = any(kw in query for kw in ["proxy", "mtproto", "telegram", "tg", "پروکسی"])
-    is_guide = any(kw in query for kw in ["guide", "help", "tutorial", "آموزش", "راهنما"])
+    # Get proxies from Supabase to generate dynamic grid
+    try:
+        px_res = supabase.table("proxies").select("*").limit(200).execute()
+        all_proxies = px_res.data or []
+        sample_size = min(20, len(all_proxies))
+        selected_proxies = random.sample(all_proxies, sample_size) if all_proxies else []
+    except Exception as e:
+        logger.error(f"Error fetching proxies for inline: {e}")
+        selected_proxies = []
 
-    # If query is non-empty and doesn't explicitly match a category, let's match both configs and proxies as falls-through
-    if query and not (is_log or is_config or is_proxy or is_guide):
-        is_config = True
-        is_proxy = True
-
-    # ---- CATEGORY: STATUS & LOGS ----
-    if is_log or not query:
-        try:
-            ch_res = supabase.table("monitored_channels").select("*").execute()
-            ch_count = len(ch_res.data) if ch_res.data else 0
-            px_res = supabase.table("proxies").select("id").execute()
-            px_count = len(px_res.data) if px_res.data else 0
-            cf_res = supabase.table("configs").select("id").execute()
-            cf_count = len(cf_res.data) if cf_res.data else 0
-
-            log_text = (
-                "HAVEALL STATUS LOGS\n"
-                "--------------------\n"
-                f"Database: Connected\n"
-                f"Monitored Channels: {ch_count}\n"
-                f"MTProto Proxies: {px_count}\n"
-                f"V2Ray Tunnels: {cf_count}\n"
-                "Sync: Every 30 minutes\n"
-                "--------------------\n"
-                f"UTC: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-
-            results.append(
-                InlineQueryResultArticle(
-                    id="stats_log_portal",
-                    title="Status & System Logs",
-                    description="Real-time counts & sync metrics",
-                    input_message_content=InputTextMessageContent(
-                        message_text=log_text,
-                        parse_mode="Markdown"
-                    )
-                )
-            )
-        except Exception as e:
-            logger.error(f"Failed to generate inline query stats: {e}")
-
-    # ---- CATEGORY: CONFIGS ----
-    if is_config or not query:
-        try:
-            res = supabase.table("configs").select("*").limit(20).execute()
-            configs = res.data or []
-            if query and not is_log:
-                configs = [c for c in configs if query in c["type"].lower() or query in (c.get("remarks") or "").lower() or query in c["raw_content"].lower()]
-            
-            for idx, c in enumerate(configs[:5]):
-                raw = c["raw_content"]
-                results.append(
-                    InlineQueryResultArticle(
-                        id=f"inline_config_{c['id']}_{idx}",
-                        title=f"Config: {c['type'].upper()} ({c['remarks'] or 'High Speed'})",
-                        description="Share tunnel configuration profile",
-                        input_message_content=InputTextMessageContent(
-                            message_text=(
-                                f"HAVEALL CONFIG | {c['type'].upper()}\n"
-                                f"Remarks: {c['remarks'] or 'High Speed'}\n"
-                                "--------------------\n"
-                                f"```\n{raw}\n```"
-                            ),
-                            parse_mode="Markdown"
-                        )
-                    )
-                )
-        except Exception as e:
-            logger.error(f"Inline configs search error: {e}")
-
-    # ---- CATEGORY: PROXIES ----
-    if is_proxy or not query:
-        try:
-            res = supabase.table("proxies").select("*").limit(20).execute()
-            proxies = res.data or []
-            if query and not is_log:
-                proxies = [p for p in proxies if query in p["server"].lower() or query in p["tg_link"].lower()]
-            
-            for idx, p in enumerate(proxies[:5]):
-                results.append(
-                    InlineQueryResultArticle(
-                        id=f"inline_proxy_{p['id']}_{idx}",
-                        title=f"MTProto Proxy #{p['id']}",
-                        description=f"Server: {p['server']}",
-                        input_message_content=InputTextMessageContent(
-                            message_text=(
-                                "HAVEALL MTPROTO PROXY\n"
-                                f"Server: {p['server']}\n"
-                                f"Port: {p['port']}"
-                            ),
-                            parse_mode="Markdown"
-                        ),
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("Connect Proxy", url=p['tg_link'])]
-                        ])
-                    )
-                )
-        except Exception as e:
-            logger.error(f"Inline proxies search error: {e}")
-
-    # ---- CATEGORY: GUIDES ----
-    if is_guide or not query:
-        # Farsi Guide
-        results.append(
-            InlineQueryResultArticle(
-                id="guide_farsi",
-                title="راهنمای اتصال سریع (Farsi)",
-                description="آموزش نحوه استفاده از کانفیگ‌ها",
-                input_message_content=InputTextMessageContent(
-                    message_text=(
-                        "راهنمای اتصال HAVEALL:\n"
-                        "۱. برنامه Hiddify یا v2rayNG را نصب کنید.\n"
-                        "۲. کانفیگ را از چت کپی کنید.\n"
-                        "۳. در برنامه دکمه (+) یا Import from Clipboard را بزنید.\n"
-                        "۴. دکمه دایره اتصال را بزنید."
-                    ),
-                    parse_mode="Markdown"
-                )
-            )
+    # 1. Configs Option
+    results.append(
+        InlineQueryResultArticle(
+            id="inline_get_configs_main",
+            title="🔌 Get 150 VPN Configs",
+            description="Receive 150 premium configs file in private chat",
+            input_message_content=InputTextMessageContent(
+                message_text="💎 **HAVEALL CONFIGS** 💎\n\nClick the button below to retrieve 150 premium configs sent to your private chat:",
+                parse_mode="Markdown"
+            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔌 Get Configs File", callback_data="get_configs")]
+            ])
         )
+    )
 
-        # English Guide
+    # 2. Proxies Option
+    if selected_proxies:
+        keyboard = []
+        for idx, p in enumerate(selected_proxies, 1):
+            if len(keyboard) == 0 or len(keyboard[-1]) >= 4:
+                keyboard.append([])
+            keyboard[-1].append(InlineKeyboardButton(f"P{idx}", url=p['tg_link']))
+        
         results.append(
             InlineQueryResultArticle(
-                id="guide_english",
-                title="Quick Connection Guide (English)",
-                description="How to import connection profiles",
+                id="inline_get_proxies_main",
+                title="⚡ Get 20 MTProto Proxies",
+                description="Instant grid of 20 secure MTProto connections",
                 input_message_content=InputTextMessageContent(
-                    message_text=(
-                        "HAVEALL Connection Guide:\n"
-                        "1. Install Hiddify or v2rayNG.\n"
-                        "2. Copy the config block from chat.\n"
-                        "3. Click (+) or Import from Clipboard in client app.\n"
-                        "4. Press connect button."
-                    ),
+                    message_text="⚡ **HAVEALL PROXIES** ⚡\n\nSelect a proxy below to connect instantly:",
                     parse_mode="Markdown"
-                )
+                ),
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
         )
 
@@ -573,6 +563,9 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 async def private_chat_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles general text messages sent directly to the bot in private chats and deletes user trigger message."""
     if update.effective_chat and update.effective_chat.type == "private":
+        raw_text = update.message.text if update.message else ""
+        await send_log_to_admins(context, f"Sent direct message: '{raw_text}'", update.effective_user)
+        
         await update.message.reply_text(
             text=(
                 "HAVEALL PORTAL\n"

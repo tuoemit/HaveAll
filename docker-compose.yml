@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: ./telegram_bot
+      dockerfile: Dockerfile
+    container_name: haveall_telegram_bot
+    restart: unless-stopped
+    env_file:
+      - ./telegram_bot/.env
+    volumes:
+      # Direct volume bind or named volume to persist group chats config
+      - group_data:/app/telegram_bot
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  group_data:

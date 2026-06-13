@@ -42,4 +42,38 @@ To initialize the cluster locally or in cloud container hosting, save the creden
 `SUPABASE_URL`=https://your-project.supabase.co  
 `SUPABASE_KEY`=your-secret-anon-or-service-role-key  
 
+---
+
+## 🔔 Premium Activity Logging
+Never miss a user interaction again. The bot features an **organized, emoji-rich administrative Telegram logging system**:
+- **Real-Time Alerts**: Every `/start` command, direct message, channel moderation, manual scrape, or interactive dashboard button tap is formatted and dispatched directly to the admin inboxes listed in `ADMIN_IDS`.
+- **Beautiful Layouts**: Alerts arrive as clean cards displaying the user (linked directly to their Telegram profile), user ID, username, designated action tag, and precise UTC trigger times.
+- **Optimized Performance**: keystroke-based inline queries are recorded exclusively on the server shell console to avoid API rate limiting, while high-value events are routed to Telegram.
+
+---
+
+## 🐳 Running on a VPS using Docker
+You can run the bot on any Linux VPS with seamless, offline-first reliability using Docker and Docker Compose.
+
+### Step 1: Create your environment configuration
+Create a `.env` file inside the `./telegram_bot` directory:
+```env
+BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+ADMIN_IDS=YOUR_TELEGRAM_CHAT_ID
+SUPABASE_URL=YOUR_SUPABASE_PROJECT_URL
+SUPABASE_KEY=YOUR_SUPABASE_SERVICE_ROLE_KEY
+```
+
+### Step 2: Spin up the container stack
+Simply execute the following command in either the **root directory** or inside **`./telegram_bot`**:
+```bash
+docker-compose up -d --build
+```
+This will build the slim Python container, mount a permanent Docker volume to persist registered group chats across system restarts (`group_data`), and daemonize the bot with automated standard crash recovery policies.
+
+### Administrative Management commands:
+- **View Live Activity Logs**: `docker logs -f haveall_telegram_bot`
+- **Stop current stack**: `docker-compose down`
+- **Restart Stack**: `docker-compose restart`
+
 ***Enjoy pristine, zero-throttle networking with style!*** 🧊💎

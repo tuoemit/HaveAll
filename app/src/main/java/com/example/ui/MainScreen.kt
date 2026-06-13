@@ -29,6 +29,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -119,16 +121,28 @@ fun MainScreen(
     }
 
     // Dynamic Linear Gradient background representing neon stars
-    val animatedGradient = Brush.linearGradient(
-        colors = if (darkMode) listOf(SpaceDarkBg, Color(0xFF070B18), Color(0xFF141F3C))
-                 else listOf(Color(0xFFF3F6FD), Color(0xFFE9EFFB), Color(0xFFE4ECF8))
-    )
+    val animatedGradient = remember(darkMode) {
+        Brush.linearGradient(
+            colors = if (darkMode) listOf(Color(0xFF000000), Color(0xFF060914), Color(0xFF000000))
+                     else listOf(Color(0xFFF3F6FD), Color(0xFFE9EFFB), Color(0xFFE4ECF8))
+        )
+    }
 
-    val dynamicTypography = if (activeLanguage == AppLanguage.FA) FarsiTypography else Typography
+    val dynamicTypography = remember(activeLanguage) {
+        if (activeLanguage == AppLanguage.FA) FarsiTypography else Typography
+    }
 
-    MaterialTheme(typography = dynamicTypography) {
-        Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
+    val layoutDirection = remember(activeLanguage) {
+        if (activeLanguage == AppLanguage.FA) LayoutDirection.Rtl else LayoutDirection.Ltr
+    }
+
+    CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
+        MaterialTheme(
+            colorScheme = MaterialTheme.colorScheme,
+            typography = dynamicTypography
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+            Scaffold(
             topBar = {
             Column(
                 modifier = Modifier
@@ -309,11 +323,30 @@ fun MainScreen(
                 }
                 .padding(paddingValues)
         ) {
-            // View sections based on selected index
-            when (selectedTab) {
-                0 -> ConfigsListSection(viewModel, configsState, translation, darkMode)
-                1 -> ProxiesListSection(viewModel, proxiesState, translation, darkMode)
-                2 -> AdminPanelSection(viewModel, channelsState, translation, darkMode)
+            // View sections based on selected index with high-end transition animation
+            AnimatedContent(
+                targetState = selectedTab,
+                transitionSpec = {
+                    if (targetState > initialState) {
+                        (slideInHorizontally { width -> width } + fadeIn(animationSpec = tween(300))).togetherWith(
+                            slideOutHorizontally { width -> -width } + fadeOut(animationSpec = tween(300))
+                        )
+                    } else {
+                        (slideInHorizontally { width -> -width } + fadeIn(animationSpec = tween(300))).togetherWith(
+                            slideOutHorizontally { width -> width } + fadeOut(animationSpec = tween(300))
+                        )
+                    }.using(
+                        SizeTransform(clip = false)
+                    )
+                },
+                label = "tab_transition",
+                modifier = Modifier.fillMaxSize()
+            ) { targetTab ->
+                when (targetTab) {
+                    0 -> ConfigsListSection(viewModel, configsState, translation, darkMode)
+                    1 -> ProxiesListSection(viewModel, proxiesState, translation, darkMode)
+                    2 -> AdminPanelSection(viewModel, channelsState, translation, darkMode)
+                }
             }
         }
 
@@ -510,6 +543,7 @@ fun MainScreen(
     }
 }
 }
+}
 
 // Configs Section
 @Composable
@@ -601,21 +635,26 @@ fun ConfigsListSection(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(configs) { index, config ->
-                        ConfigItemCard(
-                            config = config,
-                            translation = translation,
-                            darkMode = darkMode,
-                            onCopy = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val clip = ClipData.newPlainText("V2Ray Config", config.raw_content)
-                                clipboard.setPrimaryClip(clip)
-                                Toast.makeText(context, "Config copied!", Toast.LENGTH_SHORT).show()
-                            },
-                            onConnect = {
-                                viewModel.connectHiddifyConfig(context, config.raw_content)
-                            }
-                        )
+                    itemsIndexed(
+                        items = configs,
+                        key = { _, config -> config.id }
+                    ) { index, config ->
+                        AnimatedItemWrapper(index = index) {
+                            ConfigItemCard(
+                                config = config,
+                                translation = translation,
+                                darkMode = darkMode,
+                                onCopy = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    val clip = ClipData.newPlainText("V2Ray Config", config.raw_content)
+                                    clipboard.setPrimaryClip(clip)
+                                    Toast.makeText(context, "Config copied!", Toast.LENGTH_SHORT).show()
+                                },
+                                onConnect = {
+                                    viewModel.connectHiddifyConfig(context, config.raw_content)
+                                }
+                            )
+                        }
                     }
 
                     if (!viewModel.isConfigEndReached) {
@@ -819,15 +858,20 @@ fun ProxiesListSection(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(proxies) { index, proxy ->
-                        ProxyItemCard(
-                            proxy = proxy,
-                            translation = translation,
-                            darkMode = darkMode,
-                            onConnect = {
-                                viewModel.connectProxy(context, proxy.tg_link)
-                            }
-                        )
+                    itemsIndexed(
+                        items = proxies,
+                        key = { _, proxy -> proxy.id }
+                    ) { index, proxy ->
+                        AnimatedItemWrapper(index = index) {
+                            ProxyItemCard(
+                                proxy = proxy,
+                                translation = translation,
+                                darkMode = darkMode,
+                                onConnect = {
+                                    viewModel.connectProxy(context, proxy.tg_link)
+                                }
+                            )
+                        }
                     }
 
                     if (!viewModel.isProxyEndReached) {
@@ -1070,14 +1114,19 @@ fun AdminPanelSection(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(channels) { channel ->
-                        ChannelItemCard(
-                            channel = channel,
-                            darkMode = darkMode,
-                            onDelete = {
-                                viewModel.deleteCustomChannel(context, channel.username)
-                            }
-                        )
+                    items(
+                        items = channels,
+                        key = { channel -> channel.username }
+                    ) { channel ->
+                        AnimatedItemWrapper(index = 0) {
+                            ChannelItemCard(
+                                channel = channel,
+                                darkMode = darkMode,
+                                onDelete = {
+                                    viewModel.deleteCustomChannel(context, channel.username)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -1139,6 +1188,30 @@ fun ChannelItemCard(
                     modifier = Modifier.size(20.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun AnimatedItemWrapper(
+    index: Int,
+    content: @Composable () -> Unit
+) {
+    if (index > 5) {
+        content()
+    } else {
+        var visible by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(index * 30L)
+            visible = true
+        }
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(250, easing = FastOutSlowInEasing)) +
+                    slideInVertically(animationSpec = tween(250, easing = FastOutSlowInEasing)) { it / 5 },
+            exit = fadeOut(animationSpec = tween(100))
+        ) {
+            content()
         }
     }
 }
