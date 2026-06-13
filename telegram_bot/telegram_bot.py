@@ -1,10 +1,14 @@
 import logging
 import os
+import sys
 import random
 import uuid
 import json
 import asyncio
 from datetime import datetime
+
+# Guarantee the local parent directory is inside sys.path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from telegram import (
     Update,
     InlineKeyboardButton,

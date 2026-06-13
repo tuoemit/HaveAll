@@ -1,7 +1,5 @@
 import re
 import os
-import yaag  # Wait, avoid uninstalled libraries, use yaml or json if needed, but python built-in is safest!
-import yaml  # PyYAML might not be installed, we are better off using regex to parse yaml proxies or simple string splits!
 import base64
 import random
 import asyncio
