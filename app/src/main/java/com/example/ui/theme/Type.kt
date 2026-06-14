@@ -20,13 +20,7 @@ val fontProvider = GoogleFont.Provider(
 val OutfitFont = GoogleFont("Outfit")
 val VazirmatnFont = GoogleFont("Vazirmatn")
 
-val OutfitFamily = FontFamily(
-    Font(googleFont = OutfitFont, fontProvider = fontProvider, weight = FontWeight.Normal),
-    Font(googleFont = OutfitFont, fontProvider = fontProvider, weight = FontWeight.Medium),
-    Font(googleFont = OutfitFont, fontProvider = fontProvider, weight = FontWeight.Bold),
-    Font(googleFont = OutfitFont, fontProvider = fontProvider, weight = FontWeight.Black)
-)
-
+val OutfitFamily = FontFamily.Default
 val VazirmatnFamily = FontFamily(
     androidx.compose.ui.text.font.Font(resId = R.font.vazir_regular, weight = FontWeight.Normal),
     androidx.compose.ui.text.font.Font(resId = R.font.vazir_medium, weight = FontWeight.Medium),

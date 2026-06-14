@@ -211,6 +211,9 @@ async def monitor_and_sync():
                     continue
                 
                 raw_text = res.text
+                if not raw_text:
+                    print(f"⚠️ Subscription {source_name} returned empty content.")
+                    continue
                 
                 # Try Base64 decoding if the file is purely encoded
                 decoded_text = try_decode_base64(raw_text)
@@ -220,6 +223,10 @@ async def monitor_and_sync():
                     links = parse_yaml_configs_safely(decoded_text)
                 else:
                     links = CONFIG_RE.findall(decoded_text)
+                
+                if not links:
+                    print(f"⚠️ No configs extracted from {source_name}.")
+                    continue
 
                 for link in links:
                     # Clean trailing HTML parameters or quotation marks
@@ -249,6 +256,7 @@ async def monitor_and_sync():
                             "raw_content": config_clean,
                             "remarks": remarks
                         })
+                print(f"✅ Successfully added {len(links)} configs from {source_name}.")
 
             except Exception as e:
                 print(f"❌ Error fetching subscription {sub_url}: {e}")

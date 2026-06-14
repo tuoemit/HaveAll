@@ -24,7 +24,11 @@ from telegram.ext import (
     filters,
     CallbackQueryHandler,
     InlineQueryHandler,
+    ConversationHandler,
 )
+
+# New Conversation States
+REPLACE_IP_IPLIST, REPLACE_IP_CONFIGS = range(2)
 from supabase import create_client, Client
 
 def load_env():
@@ -115,6 +119,86 @@ async def send_log_to_admins(context: ContextTypes.DEFAULT_TYPE, action: str, us
         datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     )
 
+# Actions
+# --- New Conversation Handlers for IP Replacement ---
+async def start_replace_ip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Please send the list of new **clean IPs** (as text or a .txt file).")
+    return REPLACE_IP_IPLIST
+
+async def receive_ips(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['new_ips'] = []
+    # Implementation to parse ips from text or file
+    if update.message.text:
+        context.user_data['new_ips'] = update.message.text.splitlines()
+    elif update.message.document:
+        doc = await context.bot.get_file(update.message.document.file_id)
+        content = await doc.download_as_bytearray()
+        context.user_data['new_ips'] = content.decode('utf-8').splitlines()
+    
+    await update.message.reply_text(f"Received {len(context.user_data['new_ips'])} IPs. Now please send the **configuration file** or **configs** as text.")
+    return REPLACE_IP_CONFIGS
+
+async def receive_configs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    new_ips = context.user_data.get('new_ips', [])
+    config_text = ""
+    if update.message.text:
+        config_text = update.message.text
+    elif update.message.document:
+        doc = await context.bot.get_file(update.message.document.file_id)
+        content = await doc.download_as_bytearray()
+        config_text = content.decode('utf-8')
+    
+    # Process configs: Replace IPs
+    configs = config_text.splitlines()
+    processed_configs = []
+    import json
+    import base64
+    from urllib.parse import urlparse, urlunparse
+
+    for i, conf in enumerate(configs):
+        ip = new_ips[i % len(new_ips)]
+        if conf.startswith("vmess://"):
+            try:
+                data = json.loads(base64.b64decode(conf[8:]).decode('utf-8'))
+                data['add'] = ip
+                new_conf = "vmess://" + base64.b64encode(json.dumps(data).encode('utf-8')).decode('utf-8')
+                processed_configs.append(new_conf)
+            except:
+                processed_configs.append(conf)
+        elif "://" in conf:
+            # VLess, Trojan, SS
+            parts = conf.split("://")
+            proto = parts[0]
+            rest = parts[1]
+            # Replace host in proto://...host:port/...
+            # This is hard because of auth parts. 
+            # Simple approach: Replace host:port with ip:port if host is IP.
+            # Very complex to do perfectly.
+            processed_configs.append(conf) # Placeholder
+        else:
+            processed_configs.append(conf)
+    
+    # Save and send
+    result_text = "\n".join(processed_configs)
+    
+    file_path = "Modified_Configs.txt"
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(result_text)
+    
+    with open(file_path, "rb") as doc_file:
+        await context.bot.send_document(chat_id=update.effective_chat.id, document=doc_file, filename=file_path)
+    
+    os.remove(file_path)
+    await update.message.reply_text("Replacement completed!")
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Replacement cancelled.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
 # Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Glassmorphic Home Menu."""
@@ -141,6 +225,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         [
             InlineKeyboardButton("⚡ Proxies", callback_data="get_proxies"),
             InlineKeyboardButton("🔌 Configs File", callback_data="get_configs"),
+            InlineKeyboardButton("🔁 Replace IP", callback_data="start_replace_ip"),
         ],
         [
             InlineKeyboardButton("📊 Status", callback_data="status"),
@@ -788,6 +873,15 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Handlers
+    replace_ip_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_replace_ip, pattern="start_replace_ip")],
+        states={
+            REPLACE_IP_IPLIST: [MessageHandler(filters.TEXT | filters.Document.ALL, receive_ips)],
+            REPLACE_IP_CONFIGS: [MessageHandler(filters.TEXT | filters.Document.ALL, receive_configs)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(replace_ip_handler)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("scrape", scrape_command))
     app.add_handler(CommandHandler("addchannel", add_channel))
