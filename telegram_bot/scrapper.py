@@ -293,32 +293,6 @@ async def monitor_and_sync():
                             "tg_link": tg_link
                         })
 
-                # Also grab any embedded V2ray/Vless configs listed in channel messages!
-                for link in CONFIG_RE.findall(content_to_scan):
-                    config_clean = link.replace("&amp;", "&").split('"')[0].split("'")[0].split("<")[0].split("\\")[0].strip()
-                    if not config_clean:
-                        continue
-                    
-                    config_type = "vmess"
-                    lower_conf = config_clean.lower()
-                    if "vless://" in lower_conf:
-                        config_type = "vless"
-                    elif "ss://" in lower_conf:
-                        config_type = "shadowsocks"
-                    elif "hysteria" in lower_conf or "hy2://" in lower_conf:
-                        config_type = "hysteria"
-                    elif "trojan://" in lower_conf:
-                        config_type = "trojan"
-                    elif "tuic://" in lower_conf:
-                        config_type = "tuic"
-
-                    if config_clean not in [c["raw_content"] for c in configs_extracted]:
-                        configs_extracted.append({
-                            "type": config_type,
-                            "raw_content": config_clean,
-                            "remarks": f"Ref: @{channel}"
-                        })
-
             except Exception as e:
                 print(f"❌ Error scraping channel @{channel}: {e}")
 
