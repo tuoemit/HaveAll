@@ -89,7 +89,7 @@ This will build the slim Python container, mount a permanent Docker volume to pe
 After deploying, configure your bot in **@BotFather** for the best user experience:
 
 ### 1. Register Menu Commands
-Send `/setcommands` to BotFather, select your bot, then paste:
+Send `/setcommands` to BotFather, select your bot, then paste this exactly:
 ```
 start - Open main menu
 replaceip - Replace IPs in VPN configs
@@ -109,23 +109,5 @@ Send `/setmenubutton` to BotFather, select your bot, then set:
 ### 3. Enable Inline Mode
 Send `/setinline` to BotFather, select your bot, then set:
 - **Placeholder text**: `Search proxies or configs...`
-
-### 4. Set Bot Description
-Send `/setdescription` and set a clear description users see before starting:
-```
-HaveAll Portal — Free VPN proxies & configs. Scraped every 30 min from verified sources.
-```
-
-### 5. Set About Section
-Send `/setabouttext`:
-```
-Zero-cost, high-speed tunnel scraper. Proxies + configs for v2ray, Hiddify, v2rayNG.
-```
-
-### 6. Set Profile Photo
-Send `/setuserpic` and upload a logo/icon for your bot.
-
-### 7. Group Privacy (Optional)
-Send `/setprivacy` → set to **Disabled** if you want the bot to see all group messages (required for auto-detecting group chat IDs for broadcast).
 
 ***Enjoy pristine, zero-throttle networking with style!*** 🧊💎
