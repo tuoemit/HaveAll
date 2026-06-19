@@ -122,81 +122,144 @@ async def send_log_to_admins(context: ContextTypes.DEFAULT_TYPE, action: str, us
 
 # Actions
 # --- New Conversation Handlers for IP Replacement ---
+def replace_host_in_uri(conf: str, new_ip: str) -> str:
+    """Replace the host in any protocol:// URI with new_ip, preserving port and params."""
+    try:
+        proto, rest = conf.split("://", 1)
+        proto = proto.lower()
+        anchor = ""
+        if "#" in rest:
+            rest, anchor = rest.rsplit("#", 1)
+            anchor = "#" + anchor
+        query = ""
+        if "?" in rest:
+            rest, query = rest.split("?", 1)
+            query = "?" + query
+
+        if proto == "vmess":
+            try:
+                data = json.loads(base64.b64decode(rest).decode("utf-8"))
+                data["add"] = new_ip
+                if "port" not in data or not data["port"]:
+                    data["port"] = "443"
+                return "vmess://" + base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
+            except Exception:
+                return conf
+
+        # vless://uuid@host:port  or  trojan://password@host:port  or  ss://base64@host:port
+        if "@" in rest:
+            auth, host_port = rest.rsplit("@", 1)
+        else:
+            auth = ""
+            host_port = rest
+
+        # Split host:port — handle [ipv6]:port too
+        if host_port.startswith("["):
+            bracket_end = host_port.index("]")
+            port_part = host_port[bracket_end + 1:]
+            host_port = new_ip + port_part
+        elif ":" in host_port:
+            _, port_part = host_port.rsplit(":", 1)
+            host_port = new_ip + ":" + port_part
+        else:
+            host_port = new_ip
+
+        rebuilt = proto + "://" + (auth + "@" if auth else "") + host_port
+        if query:
+            rebuilt += query
+        if anchor:
+            rebuilt += anchor
+        return rebuilt
+    except Exception:
+        return conf
+
+
 async def start_replace_ip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Please send the list of new **clean IPs** (as text or a .txt file).")
+    chat_id = update.effective_chat.id
+    if update.callback_query:
+        await update.callback_query.answer()
+        await context.bot.send_message(chat_id=chat_id, text="Send the list of new **clean IPs** (one per line, as text or a .txt file).\n\nUse /cancel to abort.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("Send the list of new **clean IPs** (one per line, as text or a .txt file).\n\nUse /cancel to abort.", parse_mode="Markdown")
     return REPLACE_IP_IPLIST
 
 async def receive_ips(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['new_ips'] = []
-    # Implementation to parse ips from text or file
+    raw_lines = []
     if update.message.text:
-        context.user_data['new_ips'] = update.message.text.splitlines()
+        raw_lines = update.message.text.splitlines()
     elif update.message.document:
         doc = await context.bot.get_file(update.message.document.file_id)
         content = await doc.download_as_bytearray()
-        context.user_data['new_ips'] = content.decode('utf-8').splitlines()
-    
-    await update.message.reply_text(f"Received {len(context.user_data['new_ips'])} IPs. Now please send the **configuration file** or **configs** as text.")
+        raw_lines = content.decode("utf-8", errors="ignore").splitlines()
+
+    ips = [line.strip() for line in raw_lines if line.strip() and not line.strip().startswith("#")]
+    context.user_data["new_ips"] = ips
+
+    if not ips:
+        await update.message.reply_text("No valid IPs found. Please send IPs again (one per line), or /cancel.")
+        return REPLACE_IP_IPLIST
+
+    await update.message.reply_text(
+        f"Received **{len(ips)}** IP(s).\nNow send the **configs** (text or .txt/.yaml file).\n\nUse /cancel to abort.",
+        parse_mode="Markdown",
+    )
     return REPLACE_IP_CONFIGS
 
 async def receive_configs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    new_ips = context.user_data.get('new_ips', [])
+    new_ips = context.user_data.get("new_ips", [])
+    if not new_ips:
+        await update.message.reply_text("No IPs stored. Restart with /start.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
     config_text = ""
     if update.message.text:
         config_text = update.message.text
     elif update.message.document:
         doc = await context.bot.get_file(update.message.document.file_id)
         content = await doc.download_as_bytearray()
-        config_text = content.decode('utf-8')
-    
-    # Process configs: Replace IPs
-    configs = config_text.splitlines()
-    processed_configs = []
-    import json
-    import base64
-    from urllib.parse import urlparse, urlunparse
+        config_text = content.decode("utf-8", errors="ignore")
 
-    for i, conf in enumerate(configs):
-        ip = new_ips[i % len(new_ips)]
-        if conf.startswith("vmess://"):
-            try:
-                data = json.loads(base64.b64decode(conf[8:]).decode('utf-8'))
-                data['add'] = ip
-                new_conf = "vmess://" + base64.b64encode(json.dumps(data).encode('utf-8')).decode('utf-8')
-                processed_configs.append(new_conf)
-            except:
-                processed_configs.append(conf)
-        elif "://" in conf:
-            # VLess, Trojan, SS
-            parts = conf.split("://")
-            proto = parts[0]
-            rest = parts[1]
-            # Replace host in proto://...host:port/...
-            # This is hard because of auth parts. 
-            # Simple approach: Replace host:port with ip:port if host is IP.
-            # Very complex to do perfectly.
-            processed_configs.append(conf) # Placeholder
+    raw_lines = [line.strip() for line in config_text.splitlines() if line.strip()]
+    processed = []
+    skipped = 0
+    for i, line in enumerate(raw_lines):
+        if "://" in line or line.startswith("vmess://") or line.startswith("ss://"):
+            ip = new_ips[i % len(new_ips)]
+            result = replace_host_in_uri(line, ip)
+            if result == line:
+                skipped += 1
+            processed.append(result)
         else:
-            processed_configs.append(conf)
-    
-    # Save and send
-    result_text = "\n".join(processed_configs)
-    
+            processed.append(line)
+
+    result_text = "\n".join(processed)
     file_path = "Modified_Configs.txt"
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(result_text)
-    
+
+    caption = f"Done — {len(processed)} configs processed, {len(new_ips)} IPs cycled."
+    if skipped:
+        caption += f" ({skipped} unmodified)"
+
     with open(file_path, "rb") as doc_file:
-        await context.bot.send_document(chat_id=update.effective_chat.id, document=doc_file, filename=file_path)
-    
+        await context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=doc_file,
+            filename=file_path,
+            caption=caption,
+        )
+
     os.remove(file_path)
-    await update.message.reply_text("Replacement completed!")
-    
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Replacement cancelled.")
+    if update.callback_query:
+        await update.callback_query.answer()
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Replacement cancelled.")
+    else:
+        await update.message.reply_text("Replacement cancelled.")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -875,7 +938,10 @@ def main():
 
     # Handlers
     replace_ip_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_replace_ip, pattern="start_replace_ip")],
+        entry_points=[
+            CallbackQueryHandler(start_replace_ip, pattern="^start_replace_ip$"),
+            CommandHandler("replaceip", start_replace_ip),
+        ],
         states={
             REPLACE_IP_IPLIST: [MessageHandler(filters.TEXT | filters.Document.ALL, receive_ips)],
             REPLACE_IP_CONFIGS: [MessageHandler(filters.TEXT | filters.Document.ALL, receive_configs)],
