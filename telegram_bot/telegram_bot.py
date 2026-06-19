@@ -715,6 +715,7 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             [
                 InlineKeyboardButton("⚡ Proxies", callback_data="get_proxies"),
                 InlineKeyboardButton("🔌 Configs File", callback_data="get_configs"),
+                InlineKeyboardButton("🔁 Replace IP", callback_data="start_replace_ip"),
             ],
             [
                 InlineKeyboardButton("📊 Status", callback_data="status"),
